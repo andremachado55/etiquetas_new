@@ -71,7 +71,7 @@ export const Sidebar = ({
             className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg transition font-medium"
           >
             <FileUp size={18} />
-            Importar PPLA
+            Importar Etiqueta
           </button>
 
           <button

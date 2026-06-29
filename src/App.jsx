@@ -7,7 +7,7 @@ import { Sidebar } from './components/Layout/Sidebar';
 import { PropertiesPanel } from './components/Layout/PropertiesPanel';
 import { SettingsBar } from './components/Canvas/SettingsBar';
 import { LabelCanvas } from './components/Canvas/LabelCanvas';
-import { ImportPPLAModal } from './components/Modals/ImportPPLAModal';
+import { ImportLabelModal } from './components/Modals/ImportLabelModal';
 import { CodeOutput } from './components/CodePanel/CodeOutput';
 
 // Hooks
@@ -15,11 +15,12 @@ import { useCanvas } from './hooks/useCanvas';
 
 // Utils
 import { generateBarcode } from './utils/barcodeGenerator';
-import { 
-  parsePPLACode, 
-  calculateCanvasDimensions, 
-  mapPPLABarcodeType 
+import {
+  parsePPLACode,
+  calculateCanvasDimensions,
+  mapPPLABarcodeType
 } from './utils/pplaParser';
+import { parseLabelCode, computeBoundsMM, mapBarcodeSymbol } from './utils/labelParsers';
 
 function App() {
   const barcodeBufferRef = useRef(null);
@@ -35,7 +36,8 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState('ZPL');
   const [showImportModal, setShowImportModal] = useState(false);
-  const [pplaCode, setPplaCode] = useState('');
+  const [importCode, setImportCode] = useState('');
+  const [importLanguage, setImportLanguage] = useState('auto');
 
   // Canvas hook
   const { canvasRef, canvas } = useCanvas(labelConfig, setSelectedObject);
@@ -176,110 +178,185 @@ function App() {
     input.click();
   };
 
-  // ============ IMPORTAÇÃO PPLA ============
+  // ============ IMPORTAÇÃO DE ETIQUETA (DPL / PPLA / PPLB / ZPL) ============
 
-  const importPPLA = () => {
-    if (!canvas || !pplaCode.trim()) {
-      alert('Cole o código PPLA antes de importar');
+  const placeFabricElement = (canvas, el, lang) => {
+    // mm -> unidade do canvas (dots), usando o mesmo dpi configurado na label
+    const dpi = labelConfig.dpi;
+    const left = el.xMM * dpi;
+    // DPL é bottom-left (y sobe a partir da base); o resto é top-left.
+    // O canvas Fabric é sempre top-left, então em DPL convertemos depois de saber a altura da label.
+    const top = el.yMM * dpi;
+
+    if (el.type === 'text') {
+      const text = new fabric.IText(el.text, {
+        left, top,
+        fontSize: Math.max((el.fontSizeMM || 2.5) * dpi, 8),
+        fontFamily: 'Arial',
+        angle: el.rot || 0,
+        scaleX: el.xScale || el.wMul || 1
+      });
+      text.appType = 'text';
+      canvas.add(text);
+      return;
+    }
+
+    if (el.type === 'barcode') {
+      const barcodeType = mapBarcodeSymbol(lang, el.symbol);
+      const imgData = generateBarcode(el.data || '', barcodeType, el.humanReadable !== false);
+      if (imgData) {
+        fabric.Image.fromURL(imgData, (img) => {
+          img.set({ left, top, angle: el.rot || 0 });
+          img.appType = 'barcode';
+          img.barcodeData = el.data || '';
+          img.barcodeType = barcodeType;
+          img.showText = el.humanReadable !== false;
+          canvas.add(img);
+          canvas.renderAll();
+        });
+      }
+      return;
+    }
+
+    if (el.type === 'box') {
+      const box = new fabric.Rect({
+        left, top,
+        width: (el.wMM || 10) * dpi,
+        height: (el.hMM || 10) * dpi,
+        fill: 'transparent',
+        stroke: 'black',
+        strokeWidth: Math.max((el.thickMM || 0.3) * dpi, 1)
+      });
+      box.appType = 'box';
+      canvas.add(box);
+      return;
+    }
+    // 'graphic' (DPL ^X) e imagens não têm equivalente editável — ficam só no log.
+  };
+
+  const importLabelLegacyPPLA = () => {
+    const elements = parsePPLACode(importCode);
+    if (elements.length === 0) {
+      alert('Nenhum comando PPLA (formato Comando 2) válido encontrado');
+      return;
+    }
+    const dimensions = calculateCanvasDimensions(elements);
+    setLabelConfig(prev => ({ ...prev, ...dimensions }));
+
+    setTimeout(() => {
+      canvas.clear();
+      canvas.backgroundColor = 'white';
+
+      elements.forEach(element => {
+        switch (element.type) {
+          case 'text': {
+            const text = new fabric.IText(element.text, {
+              left: element.x / 10,
+              top: element.y / 10,
+              fontSize: parseInt(element.hMultiplier) * 12,
+              fontFamily: 'Arial',
+              angle: element.orientation * 90
+            });
+            text.appType = 'text';
+            canvas.add(text);
+            break;
+          }
+          case 'barcode': {
+            const barcodeType = mapPPLABarcodeType(element.barcodeType);
+            const imgData = generateBarcode(element.data, barcodeType, true);
+            if (imgData) {
+              fabric.Image.fromURL(imgData, (img) => {
+                img.set({ left: element.x / 10, top: element.y / 10, angle: element.orientation * 90 });
+                img.appType = 'barcode';
+                img.barcodeData = element.data;
+                img.barcodeType = barcodeType;
+                img.showText = true;
+                canvas.add(img);
+                canvas.renderAll();
+              });
+            }
+            break;
+          }
+          case 'box': {
+            const box = new fabric.Rect({
+              left: element.x / 10,
+              top: element.y / 10,
+              width: element.width / 10,
+              height: element.height / 10,
+              fill: 'transparent',
+              stroke: 'black',
+              strokeWidth: Math.max(element.hThickness, element.vThickness) / 10
+            });
+            box.appType = 'box';
+            canvas.add(box);
+            break;
+          }
+          case 'line': {
+            const line = new fabric.Line(
+              [element.x / 10, element.y / 10, (element.x + element.width) / 10, (element.y + element.height) / 10],
+              { stroke: 'black', strokeWidth: 2 }
+            );
+            line.appType = 'line';
+            canvas.add(line);
+            break;
+          }
+          default: break;
+        }
+      });
+
+      canvas.renderAll();
+      compileCode();
+      alert(`✓ ${elements.length} elementos importados com sucesso! (PPLA — formato Comando 2)`);
+    }, 200);
+  };
+
+  const importLabel = () => {
+    if (!canvas || !importCode.trim()) {
+      alert('Cole o código da etiqueta antes de importar');
+      return;
+    }
+
+    if (importLanguage === 'ppla-legacy') {
+      importLabelLegacyPPLA();
       return;
     }
 
     try {
-      const elements = parsePPLACode(pplaCode);
+      const { labels, log, detectedLang } = parseLabelCode(importCode, importLanguage);
+      const errors = log.filter(l => l.status === 'warn').length;
 
-      if (elements.length === 0) {
-        alert('Nenhum comando PPLA válido encontrado');
+      if (!labels.length || !labels[0].elements.length) {
+        alert(`Nenhum elemento reconhecido (linguagem: ${detectedLang}). Verifique o código ou selecione a linguagem manualmente.`);
         return;
       }
 
-      // Calcular dimensões e atualizar config
-      const dimensions = calculateCanvasDimensions(elements);
-      setLabelConfig({
-        ...labelConfig,
-        ...dimensions
-      });
+      const label = labels[0]; // por enquanto importa a primeira etiqueta do lote
+      const bounds = computeBoundsMM(label);
+      const widthMM = label.widthMM || bounds.width;
+      const heightMM = label.heightMM || bounds.height;
 
-      // Aguardar o canvas redimensionar
+      setLabelConfig(prev => ({ ...prev, width: Math.ceil(widthMM), height: Math.ceil(heightMM) }));
+
       setTimeout(() => {
-        // Limpar canvas antes de importar
         canvas.clear();
         canvas.backgroundColor = 'white';
 
-        // Converter cada elemento para Fabric.js
-        elements.forEach(element => {
-          switch (element.type) {
-            case 'text':
-              const text = new fabric.IText(element.text, {
-                left: element.x / 10,
-                top: element.y / 10,
-                fontSize: parseInt(element.hMultiplier) * 12,
-                fontFamily: 'Arial',
-                angle: element.orientation * 90
-              });
-              text.appType = 'text';
-              canvas.add(text);
-              break;
+        const heightDots = heightMM * labelConfig.dpi;
+        const isBottomLeft = label.coordSystem === 'bottom-left';
 
-            case 'barcode':
-              const barcodeType = mapPPLABarcodeType(element.barcodeType);
-              const imgData = generateBarcode(element.data, barcodeType, true);
-
-              if (imgData) {
-                fabric.Image.fromURL(imgData, (img) => {
-                  img.set({
-                    left: element.x / 10,
-                    top: element.y / 10,
-                    angle: element.orientation * 90
-                  });
-                  img.appType = 'barcode';
-                  img.barcodeData = element.data;
-                  img.barcodeType = barcodeType;
-                  img.showText = true;
-                  canvas.add(img);
-                  canvas.renderAll();
-                });
-              }
-              break;
-
-            case 'box':
-              const box = new fabric.Rect({
-                left: element.x / 10,
-                top: element.y / 10,
-                width: element.width / 10,
-                height: element.height / 10,
-                fill: 'transparent',
-                stroke: 'black',
-                strokeWidth: Math.max(element.hThickness, element.vThickness) / 10
-              });
-              box.appType = 'box';
-              canvas.add(box);
-              break;
-
-            case 'line':
-              const line = new fabric.Line(
-                [
-                  element.x / 10,
-                  element.y / 10,
-                  (element.x + element.width) / 10,
-                  (element.y + element.height) / 10
-                ],
-                {
-                  stroke: 'black',
-                  strokeWidth: 2
-                }
-              );
-              line.appType = 'line';
-              canvas.add(line);
-              break;
-          }
+        label.elements.forEach(el => {
+          // Em DPL (bottom-left) convertemos yMM (da base) pra top do canvas.
+          const adjusted = isBottomLeft ? { ...el, yMM: heightMM - el.yMM } : el;
+          placeFabricElement(canvas, adjusted, detectedLang);
         });
 
         canvas.renderAll();
         compileCode();
-        alert(`✓ ${elements.length} elementos importados com sucesso!`);
+        alert(`✓ ${label.elements.length} elemento(s) importado(s) (${detectedLang.toUpperCase()})` + (errors ? ` — ${errors} linha(s) ignorada(s), veja o console` : ''));
+        if (errors) console.table(log.filter(l => l.status === 'warn'));
       }, 200);
     } catch (error) {
-      alert('Erro ao importar PPLA: ' + error.message);
+      alert('Erro ao importar etiqueta: ' + error.message);
       console.error(error);
     }
   };
@@ -309,13 +386,15 @@ function App() {
 
   return (
     <div className="h-screen flex flex-col bg-gray-50">
-      {/* Modal de Importação PPLA */}
-      <ImportPPLAModal
+      {/* Modal de Importação de Etiqueta */}
+      <ImportLabelModal
         isOpen={showImportModal}
         onClose={() => setShowImportModal(false)}
-        pplaCode={pplaCode}
-        setPplaCode={setPplaCode}
-        onImport={importPPLA}
+        code={importCode}
+        setCode={setImportCode}
+        language={importLanguage}
+        setLanguage={setImportLanguage}
+        onImport={importLabel}
       />
 
       {/* Layout Principal */}

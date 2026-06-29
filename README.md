@@ -1,16 +1,40 @@
-# React + Vite
+# Label Architect Pro
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Editor visual de etiquetas (Fabric.js + React) com importação e compilação para
+**ZPL**, **PPLA**, **PPLB** e **EPL/DPL**.
 
-Currently, two official plugins are available:
+Resultado da fusão de dois projetos:
+- **etiquetas_new** — editor visual (canvas, propriedades, compiladores) — base deste repo.
+- **Etq-Viewer** — engine de parsing real de DPL/PPLB/ZPL, incorporada como importação.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Stack
+- React 19 + Vite
+- Fabric.js (canvas)
+- bwip-js (geração real de código de barras: Code128, EAN-13, Code39, QR)
+- Tailwind CSS
 
-## React Compiler
+## Funcionalidades
+- Adicionar texto, código de barras e caixas no canvas
+- Editar propriedades de cada elemento
+- Compilar o canvas pra ZPL / PPLA / PPLB / EPL
+- **Importar etiqueta pronta**: cole código DPL, PPLA, PPLB ou ZPL e ele monta os
+  elementos no canvas automaticamente, prontos pra editar (auto-detecção de linguagem)
+- Salvar/carregar projeto em JSON
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Rodando localmente
+```bash
+npm install
+npm run dev
+```
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Estrutura
+```
+src/
+  components/    # UI (Sidebar, Canvas, Properties, Modals, CodePanel)
+  compilers/      # Geração de código (ZPL/PPLA/PPLB/EPL) a partir do canvas
+  hooks/          # useCanvas (Fabric.js)
+  utils/
+    labelParsers.js   # Parsers DPL / PPLB / ZPL (importação) — vindo do Etq-Viewer
+    pplaParser.js     # Parser PPLA legado (formato "Comando 2")
+    barcodeGenerator.js
+```
